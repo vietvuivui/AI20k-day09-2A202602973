@@ -66,7 +66,7 @@ Phép cộng sạch + cách ly = nhận về khớp đúng (2968 + 53 = 3021, 31
 ### Câu 3
 Vì sao test `max_gap_ms` là `warn` còn `in_range` là `error`? Kết quả thí nghiệm `break-gate` của bạn (`break_gate.json`): test nào bắt được, bao nhiêu dòng, và điều đó cho biết gì về vai trò của "cổng chất lượng"?
 
-`max_gap_ms` (khoảng hở giữa hai mẫu > 1000 ms) có `severity: warn` vì cảm biến **mất tín hiệu là chuyện có thật** (đường hầm, mất kết nối). Dữ liệu vẫn đúng, chỉ thưa hơn, nên pipeline báo nhưng không dừng. Ở bước 2 của tôi, test này ra `WARN=1`, còn pipeline vẫn chạy tiếp (`PASS=6 WARN=1 ERROR=0`). Truy vấn lại `silver_telemetry` cho thấy mỗi drive có **đúng 1 khoảng hở > 1 s**: **3073 ms** ở A và **3124 ms** ở B. Dữ liệu quanh khoảng hở vẫn hợp lệ, chỉ thiếu mẫu, nên báo để điều tra là đủ.
+`max_gap_ms` (khoảng hở giữa hai mẫu > 1000 ms) có `severity: warn` vì cảm biến **mất tín hiệu là chuyện có thật** (đường hầm, mất kết nối). Dữ liệu vẫn đúng, chỉ thưa hơn, nên pipeline báo nhưng không dừng. Ở bước 2 của tôi, test này ra `WARN=1`, còn pipeline vẫn chạy tiếp (`PASS=6 WARN=1 ERROR=0`). Truy vấn lại `silver_telemetry` cho thấy mỗi drive có **đúng 1 khoảng hở > 1 s**: **3073 ms** ở A và **3124 ms** ở B. Đối chiếu với bảng rejects: khoảng hở này **chính là 30 dòng `speed_missing`** đã bị cách ly. Ở A, 30 dòng đó trải từ 08:01:59.189 đến 08:02:02.106; ở B, từ 14:31:29.717 đến 14:31:32.594. Tức là cảm biến tốc độ trống khoảng 3 s, các dòng đó vào quarantine, và silver còn lại một lỗ hổng. Dữ liệu hai bên lỗ hổng vẫn hợp lệ, nên chỉ cần báo để điều tra, không nên dừng cả pipeline.
 
 `in_range` (tốc độ 0..70 m/s) là `error` vì giá trị ngoài khoảng đó **vô lý về vật lý** (70 m/s ≈ 252 km/h). Nếu chúng lọt vào silver, mọi phân tích và nhãn ở phía sau sẽ sai, nên phải chặn ngay.
 
@@ -108,6 +108,12 @@ Số liệu của tôi:
 - drive A: 6 khung đen, 4 khung tối giữ lại;
 - drive B: 4 khung đen, **61** khung tối giữ lại;
 - verify xác nhận "low-light flagged but not black 10/10".
+
+Tôi đã mở ảnh trong `lake/silver/frames/drive_a/` để đối chiếu với cờ:
+- `01001` (đen) có độ sáng 0.0 và đen hoàn toàn;
+- `00545` (tối) có độ sáng 39.6, chỉ dưới ngưỡng 40 một chút, là cảnh đường có bóng cây và vẫn rõ chi tiết, nên giữ là đúng;
+- `01998` (mờ) có độ nét 2.5, nhoè hoàn toàn;
+- `00100` (trùng) gần như y hệt khung trước `00095`, chỉ có chiếc xe trắng dịch nhẹ do xe đang chạy chậm.
 
 Tôi đồng ý với cách xử lý này: bỏ khung tối sẽ làm mô hình **mù ở điều kiện thiếu sáng**, vốn là lúc lái xe nguy hiểm nhất. Giữ kèm cờ cho phép cân bằng lại hoặc đánh giá riêng sau này.
 
@@ -233,7 +239,9 @@ Kết quả, 4 trip bị loại nhiều nhất:
 Điều bạn thấy bất ngờ nhất, điều gì còn chưa rõ, và một lỗi dữ liệu mà bạn nghĩ pipeline **chưa** bắt được (nếu có). Tối đa 8 dòng.
 
 - **Bất ngờ nhất**: trip-04622 chạy trung bình **67 km/h** mà vẫn mất **34/60** khung vì "trùng". Một phần là đoạn camera đứng hình 6 giây được cấy vào drive A. Phần còn lại cho thấy dHash 64 bit (ảnh thu nhỏ còn 9×8) **không nhạy với chuyển động trên đường cao tốc**, nơi cảnh vật đồng đều (bầu trời, mặt đường). Ngưỡng 2 bit có thể đang loại nhầm khung khác nhau thật.
-- **Điều tôi tự giải thích được sau khi đối chiếu**: mỗi drive có đúng 7 khung "mất đồng bộ" (> 150 ms) vì mỗi drive có một khoảng hở telemetry khoảng 3,1 s (3073 ms và 3124 ms, chính là WARN của `max_gap_ms`). Độ trễ đồng bộ lớn nhất ở bước 3 (2884 ms và 3112 ms) gần bằng đúng khoảng hở đó. Như vậy cùng một sự cố được thấy ở hai nơi: test *báo* ở silver telemetry, và gold *loại* các khung không ghép được. **Chưa rõ**: ngưỡng 150 ms có quá chặt với xe chạy chậm không, vì khi đó telemetry cách 0,5 s vẫn gần như đúng.
+- **Điều tôi tự giải thích được sau khi đối chiếu**: mỗi drive có 7 khung "mất đồng bộ" (> 150 ms). Khi soi từng khung trong `silver_frame_telemetry`, tôi thấy hai nguyên nhân khác nhau:
+  - **6 khung** rơi vào lỗ hổng telemetry khoảng 3 s do 30 dòng `speed_missing` bị cách ly. Ở A là các khung 01195 → 01220, độ trễ 384 → 2884 ms; ở B là 00902 → 00927, độ trễ 612 → 3112 ms. Đây cũng chính là WARN của `max_gap_ms`. Một sự cố được nhìn thấy ở ba nơi: rejects, test warn, và khung bị loại ở gold.
+  - **Khung đầu tiên** (`drive_a-00000` lúc 08:00:00.000, `drive_b-00000` lúc 14:30:00.000) không ghép được telemetry nào, vì mẫu telemetry đầu tiên đến **sau** đó 14 ms (A) và 9 ms (B). Phép ASOF join chỉ tìm mẫu *trước* khung, nên bỏ qua mẫu này dù độ lệch nhỏ hơn rất nhiều so với dung sai 150 ms. Đây là một điểm yếu nhỏ của pipeline: nên dùng phép ghép "mẫu gần nhất ở cả hai phía".
 - **Lỗi pipeline chưa bắt**:
   - Tốc độ **trong khoảng 0..70 m/s nhưng nhảy phi vật lý** giữa hai mẫu cách nhau 0,1 giây (ví dụ 10 → 60 m/s) vẫn lọt vào silver. Pipeline chưa có kiểm tra gia tốc hay tính liên tục, và cũng không đối chiếu tốc độ với quãng đường GPS.
   - Khung trùng chỉ so với **khung liền trước**, nên camera đứng hình xen kẽ (khung A, B, A, B) sẽ không bị phát hiện.
