@@ -154,7 +154,7 @@ Ngày giờ hay số đếm thì đổi ở mỗi lần chạy, kể cả khi n�
 
 Hai lần chạy của tôi: `step all --reset` (từ lake trống) ra `8dfe4968256f`, sau đó chạy lại `step 4` cũng ra `8dfe4968256f`. Kết quả hoàn toàn tái lập được.
 
-Version của tôi khác của bạn bè dù cùng dữ liệu vì gold sắp trip bằng `md5(trip_id || LAB_STUDENT_ID)` rồi cắt 70/15/15 theo thứ tự đó (phân tầng theo drive). MSSV `2A202602973` là "muối" quyết định trip nào vào train/val/test. Với tôi, kết quả là 727/116/176 khung (18/4/4 trip); test của drive A là 2 trip chậm (11 km/h). MSSV khác thì split khác, nên danh sách `frame_id|split` khác và hash khác. Giảng viên chạy lại với MSSV của tôi phải ra đúng `8dfe4968256f`.
+Version của tôi khác của bạn bè dù cùng dữ liệu vì gold sắp trip bằng `md5(trip_id || LAB_STUDENT_ID)` rồi cắt 70/15/15 theo thứ tự đó (phân tầng theo drive). MSSV `2A202602973` là "muối" quyết định trip nào vào train/val/test. Với tôi, kết quả là 727/116/176 khung (18/4/4 trip); test của drive A là 2 trip chậm (11 km/h). MSSV khác thì split khác, nên danh sách `frame_id|split` khác và hash khác. Tôi đã **thử đổi MSSV** thành `TEST-0000000` rồi chạy lại `step 4`. Cùng 1019 khung, cùng 18/4/4 trip, nhưng các trip được xếp khác, nên số khung thành **755 / 143 / 121** và version thành **`7ea10081e4d9`**. Sau đó tôi đặt lại MSSV thật trong `.env`, chạy `docker compose up -d` và `step 4`, version quay về đúng **`8dfe4968256f`**. Giảng viên chạy lại với MSSV của tôi phải ra đúng `8dfe4968256f`.
 
 ### Câu 8
 Đọc phần `lineage` trong `manifest.json` của dataset bạn. Trả lời "dataset này được tạo từ dữ liệu nào?" bằng chính nội dung đó. Nếu một người hỏi 3 tháng sau, thông tin nào giúp tái tạo lại đúng dataset này?
@@ -167,7 +167,7 @@ silver.frames: 25, silver.telemetry: 0, silver.frames_flagged: 0, silver.frame_t
 input_video_sha256: drive_a = 636ba1a98dfc…e7e9aa, drive_b = bfa62703f645…bee9fdc
 ```
 
-Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 25 vì mỗi trip ghi một partition, tức 26 commit (version 0 đến 25), khi chạy từ lake trống. Ở lần chạy trước, sau thí nghiệm idempotent, con số này là 53, nhưng `manifest_sha256` vẫn y hệt: version Delta đếm số lần ghi, còn nội dung không đổi. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
+Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 25 vì mỗi trip ghi một partition, tức 26 commit (version 0 đến 25), khi chạy từ lake trống. Ở lần chạy trước, sau thí nghiệm idempotent, con số này là 53, nhưng `manifest_sha256` vẫn y hệt: version Delta đếm số lần ghi, còn nội dung không đổi. Khi kiểm tra lại bước 4, sau 2 lần chạy lại của thí nghiệm idempotent, lineage ghi `silver.frames: 27` (25 + 2), nhưng `cli export-dataset` lần hai vẫn cho cùng `dataset_version` và cùng `manifest_sha256`. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
 
 Ba tháng sau, để tái tạo đúng dataset này cần:
 1. sha256 của video đầu vào, để chắc đúng file gốc;
