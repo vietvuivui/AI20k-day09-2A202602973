@@ -36,12 +36,42 @@ Giữ mỗi nguồn một bảng và để mọi cột là chữ vì bronze là 
 ### Câu 2
 Pipeline đưa hai nguồn về một schema như thế nào (đơn vị, kiểu thời gian, **độ lệch đồng hồ**)? Bằng chứng nào trong kết quả bước 2 cho thấy đã đúng? Dán bảng quarantine của bạn (số dòng theo từng lý do, từng drive) và giải thích vì sao dòng lỗi vào `rejects` thay vì bị xoá.
 
-(trả lời ở đây)
+`stg_telemetry_a` và `stg_telemetry_b` đổi tên cột về một schema chung, sau đó `silver_telemetry_classified` gộp hai nguồn (`union all by name`). Riêng với B:
+- tốc độ `spd_kmh / 3.6` để ra m/s;
+- bàn đạp `throttle_pct / 100`, `brake_pct / 100` để ra tỉ lệ 0–1;
+- thời gian `to_timestamp((timestamp_ms - offset_ms) / 1000)`, trong đó `offset_ms = 1500` lấy từ `bronze.video_files` (khai báo trong `sources.json`). Tất cả được đưa về UTC.
+
+Bằng chứng ở bước 2:
+- mẫu đầu tiên của B là `2025-10-08 14:30:00.009`, chỉ cách thời điểm bắt đầu video (`14:30:00`) 9 ms; verify kiểm tra "within 0.5 s" và báo PASS;
+- tốc độ tối đa sau chuẩn hoá là 71 km/h (A) và 100 km/h (B), đều hợp lý; mọi tốc độ nằm trong 0..70 m/s.
+
+Bảng quarantine của tôi:
+
+| drive | duplicate | speed_missing | speed_out_of_range | tổng cách ly | sạch | nhận về |
+|---|---|---|---|---|---|---|
+| drive_a | 20 | 30 | 3 | 53 | 2968 | 3021 |
+| drive_b | 20 | 30 | 3 | 53 | 3181 | 3234 |
+
+Phép cộng sạch + cách ly = nhận về khớp đúng (2968 + 53 = 3021, 3181 + 53 = 3234), nên **không dòng nào biến mất**. Dòng lỗi vào `telemetry_rejects` kèm `reject_reason` thay vì bị xoá vì bốn lý do:
+- có thể **đếm và theo dõi** chất lượng nguồn theo thời gian, ví dụ cảm biến B bỗng thiếu nhiều tốc độ;
+- **gỡ lỗi ngược** về đúng dòng CSV nhờ `_row_no`;
+- nếu luật sai (ví dụ ngưỡng 70 m/s quá chặt), có thể **xử lý lại** các dòng đó;
+- xoá im lặng che mất sự cố thượng nguồn và làm số liệu không đối soát được.
 
 ### Câu 3
 Vì sao test `max_gap_ms` là `warn` còn `in_range` là `error`? Kết quả thí nghiệm `break-gate` của bạn (`break_gate.json`): test nào bắt được, bao nhiêu dòng, và điều đó cho biết gì về vai trò của "cổng chất lượng"?
 
-(trả lời ở đây)
+`max_gap_ms` (khoảng hở giữa hai mẫu > 1000 ms) có `severity: warn` vì cảm biến **mất tín hiệu là chuyện có thật** (đường hầm, mất kết nối). Dữ liệu vẫn đúng, chỉ thưa hơn, nên pipeline báo nhưng không dừng. Ở bước 2 của tôi, test này ra `WARN=1`, còn pipeline vẫn chạy tiếp (`PASS=6 WARN=1 ERROR=0`).
+
+`in_range` (tốc độ 0..70 m/s) là `error` vì giá trị ngoài khoảng đó **vô lý về vật lý** (70 m/s ≈ 252 km/h). Nếu chúng lọt vào silver, mọi phân tích và nhãn ở phía sau sẽ sai, nên phải chặn ngay.
+
+Thí nghiệm `break-gate` (`break_gate.json`):
+- nới `max_speed_mps` từ 70 lên **1000**, nên luật làm sạch không còn loại các tốc độ vô lý;
+- `dbt test` đổi thành `PASS=5 WARN=1 ERROR=1`, trong đó test `in_range_silver_telemetry_speed_mps__70__0` bắt được **6 dòng**, đúng bằng 3 + 3 dòng `speed_out_of_range` của hai drive;
+- `gate_failed: true`;
+- khôi phục luật gốc thì quay về `PASS=6 WARN=1 ERROR=0`.
+
+Ý nghĩa: cổng chất lượng là **lớp phòng thủ thứ hai, độc lập với code biến đổi**. Khi một luật làm sạch bị nới, dù cố ý hay do bug, test vẫn giữ hợp đồng dữ liệu và chặn dữ liệu xấu trước khi xuống gold. Trong Airflow, task `dbt_test` đỏ thì các task sau không chạy.
 
 ## Bước 3 · Silver frames
 
