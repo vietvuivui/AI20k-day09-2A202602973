@@ -182,12 +182,12 @@ Chạy lại xong, so `dataset_version` và `manifest_sha256` để xác nhận 
 ### Câu 9
 Mô tả chính xác điều xảy ra khi trip của bạn sập rồi chạy lại: bao nhiêu task chuyển đỏ, bao nhiêu task `upstream_failed`, bạn clear gì, dữ liệu có nhân đôi không, `dataset_version` có đổi không? Bằng chứng (ảnh, số) là gì?
 
-Trip của tôi là `trip-00722`, tính bằng `202602973 % 26 = 1`. MSSV có chữ `A` nên tôi lấy phần số. Tôi đặt `LAB_FAIL_ONCE=trip-00722`, trigger `day09_reset`, rồi trigger `day09_video_pipeline` (run `manual__2026-10-12T10:25:58`).
+Trip của tôi là `trip-00722`, tính bằng `202602973 % 26 = 1`. MSSV có chữ `A` nên lệnh trong đề (`int(MSSV) % 26`) báo `ValueError: invalid literal for int()`. Vì vậy tôi lấy phần số của MSSV. Tôi đặt `LAB_FAIL_ONCE=trip-00722`, trigger `day09_reset`, rồi trigger `day09_video_pipeline` (run `manual__2026-10-12T10:25:58`).
 
-- **1 task đỏ**: `silver_frames` map_index 1. Log ghi `RuntimeError: simulated crash while extracting trip-00722; run it again` (ảnh `crash_log.png`).
-- **7 task `upstream_failed`**: `dbt_run_silver`, `dbt_test_silver`, `dbt_run_gold`, `dbt_test_gold`, `publish_lake`, `export_dataset`, `publish_warehouse` (ảnh `crash_graph_red.png`).
+- **1 task đỏ**: `silver_frames` map_index 1. Log ghi `RuntimeError: simulated crash while extracting trip-00722; run it again` (ảnh `fail_task_log.png`).
+- **7 task `upstream_failed`**: `dbt_run_silver`, `dbt_test_silver`, `dbt_run_gold`, `dbt_test_gold`, `publish_lake`, `export_dataset`, `publish_warehouse` (ảnh `fail_graph_red.png`).
 - **29 task vẫn xanh**: 3 task bronze, `trip_commands` và 25 task `silver_frames` của các trip khác. Các task này **không chạy lại**.
-- Tôi **chỉ clear task đỏ** (kèm các task phía sau đang `upstream_failed`, tương đương nút "Clear task" với lựa chọn Downstream và Only failed). Tổng cộng 8 task chạy lại, và DAG chuyển **xanh 37/37** (ảnh `crash_rerun_green.png`).
+- Tôi **chỉ clear task đỏ** (kèm các task phía sau đang `upstream_failed`, tương đương nút "Clear task" với lựa chọn Downstream và Only failed). Tổng cộng 8 task chạy lại, và DAG chuyển **xanh 37/37** (ảnh `airflow_retry_graph.png`).
 
 Dữ liệu **không nhân đôi**:
 - `trip-00722` có **60 dòng, 60 `frame_id` riêng biệt** trong `silver.frames`;
