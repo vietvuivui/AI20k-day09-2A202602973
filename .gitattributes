@@ -1,0 +1,6 @@
+# Giữ LF ở mọi hệ điều hành (script chạy trong container Linux; tests/verify.py/docker-compose.yml được đối chiếu bằng sha256)
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.zip binary
