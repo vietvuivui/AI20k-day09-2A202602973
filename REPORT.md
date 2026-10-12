@@ -4,15 +4,15 @@
 
 | | |
 |---|---|
-| Họ và tên | `<điền>` |
-| MSSV (đúng bằng `LAB_STUDENT_ID` trong `.env`) | `<điền>` |
-| GitHub | `<điền: tên tài khoản>` |
-| Trip dùng cho bài tập sập và chạy lại (xem GUIDE, bước 5) | `<điền: trip-xxxxx>` |
+| Họ và tên | Nguyễn Văn Quốc Việt |
+| MSSV (đúng bằng `LAB_STUDENT_ID` trong `.env`) | `2A202602973` |
+| GitHub | vietvuivui |
+| Trip dùng cho bài tập sập và chạy lại (xem GUIDE, bước 5) | `trip-00722` |
 
 ## Kết quả cuối
 
-- `dataset_version` của bạn: `<điền>`  (phải khớp `report/evidence/run_summary.json`)
-- Số khung hình train / val / test của bạn: `<điền>`
+- `dataset_version` của bạn: `8dfe4968256f`  (phải khớp `report/evidence/run_summary.json`)
+- Số khung hình train / val / test của bạn: **727 / 116 / 176** (tổng 1019 khung; 18 / 4 / 4 trip)
 - `report/verify.txt`: tạo bằng `python3 scripts/check_submission.py --save-verify` (phải có `27/27 checks passed`).
 - Ảnh chụp trong `report/screenshots/`: `airflow_graph.png`, `minio_lake.png`, `metabase_dashboard.png`, và ảnh bài tập sập/chạy lại (log task đỏ thấy trip của bạn).
 
@@ -21,7 +21,15 @@
 ### Câu 1
 Liệt kê **ít nhất 4 khác biệt** giữa telemetry nguồn A và nguồn B mà bạn thấy ở bronze. Vì sao pipeline giữ **mỗi nguồn một bảng bronze** và để mọi cột ở dạng chữ, thay vì gộp và ép kiểu ngay?
 
-(trả lời ở đây)
+Số dòng bronze khớp đúng file CSV: A có **3021** dòng, B có **3234** dòng; chạy `step 1` lần hai mọi thứ báo `already present` (không thêm dòng). Khác biệt giữa hai nguồn:
+
+1. **Tên cột**: A dùng `ts_utc, speed_mps, heading_deg, lat, lon, alt_m, acc_x, gas, brake`; B dùng `timestamp_ms, spd_kmh, hdg, latitude, longitude, altitude, ax, throttle_pct, brake_pct`.
+2. **Kiểu thời gian**: A là chuỗi ISO UTC (`2025-10-07T08:00:00.014Z`), B là epoch mili-giây (`1759933801509`).
+3. **Đơn vị tốc độ**: A là m/s (`1.213`), B là km/h (`55.11`).
+4. **Bàn đạp**: A là tỉ lệ 0–1 (`gas 0.028`), B là phần trăm (`throttle_pct 2.0`).
+5. **Đồng hồ**: thiết bị B chạy nhanh hơn video **1500 ms** (khai báo trong `sources.json`), A lệch 0.
+
+Giữ mỗi nguồn một bảng và để mọi cột là chữ vì bronze là **bản ghi gốc bất biến**: nếu ép kiểu ngay, giá trị lỗi (ô tốc độ trống, chữ lạ) sẽ thành NULL hoặc làm job sập, và ta mất bằng chứng dữ liệu thô trông thế nào. Gộp ngay thì phải chọn một schema khi chưa biết B "drift" ra sao. Để thô, khi luật làm sạch thay đổi ta chỉ cần chạy lại silver từ bronze, không phải ingest lại; các cột `_source_file`, `_batch_id`, `_row_no` giúp truy ngược từng dòng về file gốc.
 
 ## Bước 2 · Silver telemetry
 
