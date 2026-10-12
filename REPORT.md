@@ -78,7 +78,13 @@ Thí nghiệm `break-gate` (`break_gate.json`):
 ### Câu 4
 Dựa vào `idempotency.json`: số dòng trước và sau hai lần chạy lại, và khi ghi kiểu `append`. Vì sao Delta `overwrite` theo partition (một trip) an toàn hơn xoá rồi ghi lại, nhất là khi giữa chừng có lỗi?
 
-(trả lời ở đây)
+`idempotency.json`, chạy lại partition `trip-00003` (60 khung):
+- **Cách của pipeline** (Delta `overwrite` với predicate `trip_id = 'trip-00003'`): trước có **1246** dòng, dấu vân tay `6c7480dfde7e`. Sau **2 lần chạy lại** vẫn **1246** dòng, dấu vân tay `6c7480dfde7e`, nghĩa là bảng không đổi cả số dòng lẫn nội dung (`unchanged: true`).
+- **Cách sai** (`append`, chạy 2 lần cho cùng trip): ra **120** dòng cho một trip chỉ có 60 khung, tức dữ liệu bị nhân đôi.
+
+Delta `overwrite` theo partition an toàn hơn "xoá rồi ghi lại" vì nó là **một commit nguyên tử** trong `_delta_log`: phần xoá dữ liệu cũ của trip và phần thêm dữ liệu mới nằm chung một version. Nếu job sập giữa chừng, commit chưa được ghi nên người đọc vẫn thấy version cũ đầy đủ. Các file Parquet dở dang chỉ là file "mồ côi", không ai đọc tới.
+
+Với "xoá rồi ghi" là hai thao tác tách rời: sập sau bước xoá thì trip **mất dữ liệu**, còn người đọc ở giữa hai bước thấy bảng thiếu. Ghi đè chỉ đúng predicate cũng giúp chạy lại **một trip** mà không đụng 25 trip còn lại, đúng điều Airflow cần khi một task `silver_frames` lỗi. Bonus: lịch sử version (`cli history silver.frames`) cho phép time travel nếu cần quay lại.
 
 ### Câu 5
 Khung hình **đen** và khung hình **tối** khác nhau thế nào, pipeline xử lý khác nhau ra sao, bạn có đồng ý không? Dựa vào `threshold.json`: nếu chọn ngưỡng 0, 2, 6 thì bao nhiêu khung bị coi là trùng ở mỗi drive? Bạn chọn ngưỡng nào, vì sao, và ngưỡng đó phụ thuộc vào tốc độ xe thế nào?
@@ -89,7 +95,31 @@ Khung hình **đen** và khung hình **tối** khác nhau thế nào, pipeline x
 | 2 | | |
 | 6 | | |
 
-(trả lời ở đây)
+Hai loại khung khác nhau ở độ sáng trung bình (luma):
+- **Khung đen**: luma < `dark_luma = 12`. Đây là ảnh hỏng (camera tắt, lỗi giải mã) và không chứa thông tin, nên bị **loại** khỏi gold.
+- **Khung tối**: 12 ≤ luma < `dark_soft = 40`. Đây là cảnh thật nhưng thiếu sáng (đường hầm, bóng râm, chiều tối), nên chỉ được **gắn cờ `is_dark` và giữ lại**.
+
+Số liệu của tôi:
+- drive A: 6 khung đen, 4 khung tối giữ lại;
+- drive B: 4 khung đen, **61** khung tối giữ lại;
+- verify xác nhận "low-light flagged but not black 10/10".
+
+Tôi đồng ý với cách xử lý này: bỏ khung tối sẽ làm mô hình **mù ở điều kiện thiếu sáng**, vốn là lúc lái xe nguy hiểm nhất. Giữ kèm cờ cho phép cân bằng lại hoặc đánh giá riêng sau này.
+
+`threshold.json` (số khung bị coi là trùng với khung liền trước, theo số bit dHash được phép khác):
+
+| dHash khác tối đa | số khung trùng, drive A | số khung trùng, drive B |
+|---|---|---|
+| 0 | 61 | 8 |
+| 2 | 149 | 53 |
+| 6 | 363 | 244 |
+
+Tôi chọn **ngưỡng 2** (ngưỡng đang dùng), vì ba lý do:
+- ngưỡng 0 chỉ bắt khung giống hệt từng bit, nên bỏ sót camera đứng hình có nhiễu nén;
+- ngưỡng 6 loại **363/602 (60 %)** khung của A và 244/644 của B, tức xoá cả những khung khác nhau thật;
+- ngưỡng 2 bắt được camera đứng hình 6 giây ở A (verify: 11/12).
+
+Ngưỡng phụ thuộc tốc độ xe. Với mẫu 2 khung/giây, khi xe chạy chậm hoặc đứng đèn đỏ, hai khung liền nhau gần như y hệt, nên số khung trùng tăng mạnh. Đó là lý do drive A (trip test chỉ 11 km/h trung bình) có 149 khung trùng, so với 53 ở B (đa số nhanh, train 79 km/h). Khi xe chạy nhanh, cảnh đổi nhiều nên một ngưỡng cao vẫn ít khi loại nhầm. Một cách hợp lý hơn là ngưỡng thích ứng theo `speed_mps`, hoặc lấy mẫu theo quãng đường thay vì theo thời gian.
 
 ## Bước 4 · Gold
 
