@@ -29,6 +29,11 @@ Số dòng bronze khớp đúng file CSV: A có **3021** dòng, B có **3234** d
 4. **Bàn đạp**: A là tỉ lệ 0–1 (`gas 0.028`), B là phần trăm (`throttle_pct 2.0`).
 5. **Đồng hồ**: thiết bị B chạy nhanh hơn video **1500 ms** (khai báo trong `sources.json`), A lệch 0.
 
+Kiểm tra trực tiếp ở bronze cho thấy:
+- `speed_mps` của A có kiểu `VARCHAR` và **30 ô trống**;
+- `cli history bronze.raw_telemetry_a` chỉ có **1 commit** (version 0, WRITE 3021 dòng) dù đã nạp hai lần;
+- `bronze.video_files` có **2 dòng với 2 sha256 khác nhau** (`636ba1a9…` cho A, `bfa62703…` cho B), lần nạp lặp không nhân đôi video.
+
 Giữ mỗi nguồn một bảng và để mọi cột là chữ vì bronze là **bản ghi gốc bất biến**: nếu ép kiểu ngay, giá trị lỗi (ô tốc độ trống, chữ lạ) sẽ thành NULL hoặc làm job sập, và ta mất bằng chứng dữ liệu thô trông thế nào. Gộp ngay thì phải chọn một schema khi chưa biết B "drift" ra sao. Để thô, khi luật làm sạch thay đổi ta chỉ cần chạy lại silver từ bronze, không phải ingest lại; các cột `_source_file`, `_batch_id`, `_row_no` giúp truy ngược từng dòng về file gốc.
 
 ## Bước 2 · Silver telemetry
