@@ -66,13 +66,13 @@ Phép cộng sạch + cách ly = nhận về khớp đúng (2968 + 53 = 3021, 31
 ### Câu 3
 Vì sao test `max_gap_ms` là `warn` còn `in_range` là `error`? Kết quả thí nghiệm `break-gate` của bạn (`break_gate.json`): test nào bắt được, bao nhiêu dòng, và điều đó cho biết gì về vai trò của "cổng chất lượng"?
 
-`max_gap_ms` (khoảng hở giữa hai mẫu > 1000 ms) có `severity: warn` vì cảm biến **mất tín hiệu là chuyện có thật** (đường hầm, mất kết nối). Dữ liệu vẫn đúng, chỉ thưa hơn, nên pipeline báo nhưng không dừng. Ở bước 2 của tôi, test này ra `WARN=1`, còn pipeline vẫn chạy tiếp (`PASS=6 WARN=1 ERROR=0`).
+`max_gap_ms` (khoảng hở giữa hai mẫu > 1000 ms) có `severity: warn` vì cảm biến **mất tín hiệu là chuyện có thật** (đường hầm, mất kết nối). Dữ liệu vẫn đúng, chỉ thưa hơn, nên pipeline báo nhưng không dừng. Ở bước 2 của tôi, test này ra `WARN=1`, còn pipeline vẫn chạy tiếp (`PASS=6 WARN=1 ERROR=0`). Truy vấn lại `silver_telemetry` cho thấy mỗi drive có **đúng 1 khoảng hở > 1 s**: **3073 ms** ở A và **3124 ms** ở B. Dữ liệu quanh khoảng hở vẫn hợp lệ, chỉ thiếu mẫu, nên báo để điều tra là đủ.
 
 `in_range` (tốc độ 0..70 m/s) là `error` vì giá trị ngoài khoảng đó **vô lý về vật lý** (70 m/s ≈ 252 km/h). Nếu chúng lọt vào silver, mọi phân tích và nhãn ở phía sau sẽ sai, nên phải chặn ngay.
 
 Thí nghiệm `break-gate` (`break_gate.json`):
 - nới `max_speed_mps` từ 70 lên **1000**, nên luật làm sạch không còn loại các tốc độ vô lý;
-- `dbt test` đổi thành `PASS=5 WARN=1 ERROR=1`, trong đó test `in_range_silver_telemetry_speed_mps__70__0` bắt được **6 dòng**, đúng bằng 3 + 3 dòng `speed_out_of_range` của hai drive;
+- `dbt test` đổi thành `PASS=5 WARN=1 ERROR=1`, trong đó test `in_range_silver_telemetry_speed_mps__70__0` bắt được **6 dòng**, đúng bằng 3 + 3 dòng `speed_out_of_range` của hai drive. Cả 6 dòng đều là **250 m/s, tức 900 km/h**, không thể có với một chiếc KIA Niro;
 - `gate_failed: true`;
 - khôi phục luật gốc thì quay về `PASS=6 WARN=1 ERROR=0`.
 
@@ -233,7 +233,7 @@ Kết quả, 4 trip bị loại nhiều nhất:
 Điều bạn thấy bất ngờ nhất, điều gì còn chưa rõ, và một lỗi dữ liệu mà bạn nghĩ pipeline **chưa** bắt được (nếu có). Tối đa 8 dòng.
 
 - **Bất ngờ nhất**: trip-04622 chạy trung bình **67 km/h** mà vẫn mất **34/60** khung vì "trùng". Một phần là đoạn camera đứng hình 6 giây được cấy vào drive A. Phần còn lại cho thấy dHash 64 bit (ảnh thu nhỏ còn 9×8) **không nhạy với chuyển động trên đường cao tốc**, nơi cảnh vật đồng đều (bầu trời, mặt đường). Ngưỡng 2 bit có thể đang loại nhầm khung khác nhau thật.
-- **Chưa rõ**: vì sao mỗi drive đều có đúng 7 khung "mất đồng bộ" (> 150 ms). Tôi đoán đó là các khoảng hở telemetry mà test `max_gap_ms` báo WARN, nhưng chưa kiểm chứng từng khung.
+- **Điều tôi tự giải thích được sau khi đối chiếu**: mỗi drive có đúng 7 khung "mất đồng bộ" (> 150 ms) vì mỗi drive có một khoảng hở telemetry khoảng 3,1 s (3073 ms và 3124 ms, chính là WARN của `max_gap_ms`). Độ trễ đồng bộ lớn nhất ở bước 3 (2884 ms và 3112 ms) gần bằng đúng khoảng hở đó. Như vậy cùng một sự cố được thấy ở hai nơi: test *báo* ở silver telemetry, và gold *loại* các khung không ghép được. **Chưa rõ**: ngưỡng 150 ms có quá chặt với xe chạy chậm không, vì khi đó telemetry cách 0,5 s vẫn gần như đúng.
 - **Lỗi pipeline chưa bắt**:
   - Tốc độ **trong khoảng 0..70 m/s nhưng nhảy phi vật lý** giữa hai mẫu cách nhau 0,1 giây (ví dụ 10 → 60 m/s) vẫn lọt vào silver. Pipeline chưa có kiểm tra gia tốc hay tính liên tục, và cũng không đối chiếu tốc độ với quãng đường GPS.
   - Khung trùng chỉ so với **khung liền trước**, nên camera đứng hình xen kẽ (khung A, B, A, B) sẽ không bị phát hiện.
