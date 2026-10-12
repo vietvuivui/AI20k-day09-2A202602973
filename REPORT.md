@@ -14,7 +14,7 @@
 - `dataset_version` của bạn: `8dfe4968256f`  (phải khớp `report/evidence/run_summary.json`)
 - Số khung hình train / val / test của bạn: **727 / 116 / 176** (tổng 1019 khung; 18 / 4 / 4 trip)
 - `report/verify.txt`: tạo bằng `python3 scripts/check_submission.py --save-verify` (phải có `27/27 checks passed`).
-- Ảnh chụp trong `report/screenshots/`: `airflow_graph.png`, `minio_lake.png`, `metabase_dashboard.png`, và ảnh bài tập sập/chạy lại (log task đỏ thấy trip của bạn).
+- Ảnh chụp trong `report/screenshots/`: `airflow_graph.png`, `minio_lake.png`, `metabase_dashboard.png`, và ảnh bài tập sập/chạy lại: `fail_task_log.png` (log task đỏ thấy `trip-00722`), `fail_graph_red.png`, `airflow_retry_graph.png`.
 
 ## Bước 1 · Bronze
 
@@ -94,11 +94,13 @@ Với "xoá rồi ghi" là hai thao tác tách rời: sập sau bước xoá th�
 ### Câu 5
 Khung hình **đen** và khung hình **tối** khác nhau thế nào, pipeline xử lý khác nhau ra sao, bạn có đồng ý không? Dựa vào `threshold.json`: nếu chọn ngưỡng 0, 2, 6 thì bao nhiêu khung bị coi là trùng ở mỗi drive? Bạn chọn ngưỡng nào, vì sao, và ngưỡng đó phụ thuộc vào tốc độ xe thế nào?
 
+`threshold.json` (số khung bị coi là trùng với khung liền trước, theo số bit dHash được phép khác):
+
 | dHash khác tối đa | số khung trùng, drive A | số khung trùng, drive B |
 |---|---|---|
-| 0 | | |
-| 2 | | |
-| 6 | | |
+| 0 | 61 | 8 |
+| 2 | 149 | 53 |
+| 6 | 363 | 244 |
 
 Hai loại khung khác nhau ở độ sáng trung bình (luma):
 - **Khung đen**: luma < `dark_luma = 12`. Đây là ảnh hỏng (camera tắt, lỗi giải mã) và không chứa thông tin, nên bị **loại** khỏi gold.
@@ -117,18 +119,10 @@ Tôi đã mở ảnh trong `lake/silver/frames/drive_a/` để đối chiếu v�
 
 Tôi đồng ý với cách xử lý này: bỏ khung tối sẽ làm mô hình **mù ở điều kiện thiếu sáng**, vốn là lúc lái xe nguy hiểm nhất. Giữ kèm cờ cho phép cân bằng lại hoặc đánh giá riêng sau này.
 
-`threshold.json` (số khung bị coi là trùng với khung liền trước, theo số bit dHash được phép khác):
-
-| dHash khác tối đa | số khung trùng, drive A | số khung trùng, drive B |
-|---|---|---|
-| 0 | 61 | 8 |
-| 2 | 149 | 53 |
-| 6 | 363 | 244 |
-
 Tôi chọn **ngưỡng 2** (ngưỡng đang dùng), vì ba lý do:
 - ngưỡng 0 chỉ bắt khung giống hệt từng bit, nên bỏ sót camera đứng hình có nhiễu nén;
 - ngưỡng 6 loại **363/602 (60 %)** khung của A và 244/644 của B, tức xoá cả những khung khác nhau thật;
-- ngưỡng 2 bắt được camera đứng hình 6 giây ở A (verify: 11/12).
+- ngưỡng 2 bắt được camera đứng hình 6 giây ở A (giây 150–156, thuộc trip-03904; verify: 11/12).
 
 Ngưỡng phụ thuộc tốc độ xe. Với mẫu 2 khung/giây, khi xe chạy chậm hoặc đứng đèn đỏ, hai khung liền nhau gần như y hệt, nên số khung trùng tăng mạnh. Đó là lý do drive A (trip test chỉ 11 km/h trung bình) có 149 khung trùng, so với 53 ở B (đa số nhanh, train 79 km/h). Khi xe chạy nhanh, cảnh đổi nhiều nên một ngưỡng cao vẫn ít khi loại nhầm. Một cách hợp lý hơn là ngưỡng thích ứng theo `speed_mps`, hoặc lấy mẫu theo quãng đường thay vì theo thời gian.
 
@@ -167,7 +161,7 @@ silver.frames: 25, silver.telemetry: 0, silver.frames_flagged: 0, silver.frame_t
 input_video_sha256: drive_a = 636ba1a98dfc…e7e9aa, drive_b = bfa62703f645…bee9fdc
 ```
 
-Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 25 vì mỗi trip ghi một partition, tức 26 commit (version 0 đến 25), khi chạy từ lake trống. Ở lần chạy trước, sau thí nghiệm idempotent, con số này là 53, nhưng `manifest_sha256` vẫn y hệt: version Delta đếm số lần ghi, còn nội dung không đổi. Khi kiểm tra lại bước 4, sau 2 lần chạy lại của thí nghiệm idempotent, lineage ghi `silver.frames: 27` (25 + 2), nhưng `cli export-dataset` lần hai vẫn cho cùng `dataset_version` và cùng `manifest_sha256`. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
+Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 25 vì mỗi trip ghi một partition, tức 26 commit (version 0 đến 25), khi chạy từ lake trống. Khi kiểm tra lại bước 4, sau 2 lần chạy lại của thí nghiệm idempotent, lineage ghi `silver.frames: 27` (25 + 2), nhưng `cli export-dataset` lần hai vẫn cho cùng `dataset_version` và cùng `manifest_sha256`. Version Delta đếm số lần ghi, còn nội dung thì không đổi. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
 
 Ba tháng sau, để tái tạo đúng dataset này cần:
 1. sha256 của video đầu vào, để chắc đúng file gốc;
@@ -229,16 +223,19 @@ Kết quả, 4 trip bị loại nhiều nhất:
 | trip-08888 | A | test | 6.5 | 60 | 36 | 40.0 |
 
 Đọc biểu đồ:
-- Cả 8 trip bị loại nhiều nhất đều thuộc drive A (6 trip) hoặc là trip B chạy nhanh.
-- Truy ngược bằng `silver_frames_flagged`, gần như toàn bộ khung bị loại ở 4 trip trên là **khung trùng** (dHash), không phải đen hay mờ. Ví dụ trip-04622 có 34 khung trùng, trip-02086 có 28, trip-08888 có 24.
-- Với trip chậm (6–18 km/h) thì điều này hợp lý: xe gần như đứng yên.
-- Đáng chú ý, ở split test, trip-08888 (6.5 km/h) mất 40 % khung, nên test set của drive A vừa ít vừa thiên về cảnh chạy chậm.
+- 6/8 trip bị loại nhiều nhất thuộc drive A. 2 trip còn lại của B đều chạy nhanh (58 và 91 km/h).
+- Truy ngược bằng `silver_frames_flagged`, **toàn bộ** khung bị loại ở 4 trip trên là **khung trùng** (dHash), không có khung đen hay mờ: trip-04622 có 34 khung trùng, trip-03904 có 11, trip-02086 có 28, trip-08888 có 24.
+- Nhưng nguyên nhân khác nhau:
+  - trip-03904 chứa đoạn **camera đứng hình** được cấy vào (giây 150–156), nên loại là đúng;
+  - trip-08888 (6.5 km/h) và trip-02086 (17.6 km/h) chạy chậm, cảnh gần như đứng yên, cũng hợp lý;
+  - trip-04622 chạy **67 km/h** mà vẫn mất 34/60 khung. Đây là loại nhầm (xem mục Nhìn lại).
+- Ở split test, trip-08888 mất 40 % khung, nên test set của drive A vừa ít vừa thiên về cảnh chạy chậm.
 
 ## Nhìn lại
 
 Điều bạn thấy bất ngờ nhất, điều gì còn chưa rõ, và một lỗi dữ liệu mà bạn nghĩ pipeline **chưa** bắt được (nếu có). Tối đa 8 dòng.
 
-- **Bất ngờ nhất**: trip-04622 chạy trung bình **67 km/h** mà vẫn mất **34/60** khung vì "trùng". Một phần là đoạn camera đứng hình 6 giây được cấy vào drive A. Phần còn lại cho thấy dHash 64 bit (ảnh thu nhỏ còn 9×8) **không nhạy với chuyển động trên đường cao tốc**, nơi cảnh vật đồng đều (bầu trời, mặt đường). Ngưỡng 2 bit có thể đang loại nhầm khung khác nhau thật.
+- **Bất ngờ nhất**: trip-04622 chạy **65–67 km/h** mà vẫn mất **34/60** khung vì "trùng", dù trip này không chứa lỗi cấy nào (đoạn đứng hình nằm ở trip-03904). Tôi mở các khung liên tiếp `02401`, `02406`, `02411`: vạch đường và mép cỏ đều dịch chuyển, tức các khung khác nhau thật. Nhưng trên đường cao tốc có tường chắn, bố cục tường, trời, mặt đường gần như không đổi, nên dHash thu nhỏ còn **9×8** không thấy chuyển động. Đây là một **lỗi pipeline chưa xử lý**: loại nhầm khung tốt, đúng ở cảnh tốc độ cao vốn hiếm trong dataset.
 - **Điều tôi tự giải thích được sau khi đối chiếu**: mỗi drive có 7 khung "mất đồng bộ" (> 150 ms). Khi soi từng khung trong `silver_frame_telemetry`, tôi thấy hai nguyên nhân khác nhau:
   - **6 khung** rơi vào lỗ hổng telemetry khoảng 3 s do 30 dòng `speed_missing` bị cách ly. Ở A là các khung 01195 → 01220, độ trễ 384 → 2884 ms; ở B là 00902 → 00927, độ trễ 612 → 3112 ms. Đây cũng chính là WARN của `max_gap_ms`. Một sự cố được nhìn thấy ở ba nơi: rejects, test warn, và khung bị loại ở gold.
   - **Khung đầu tiên** (`drive_a-00000` lúc 08:00:00.000, `drive_b-00000` lúc 14:30:00.000) không ghép được telemetry nào, vì mẫu telemetry đầu tiên đến **sau** đó 14 ms (A) và 9 ms (B). Phép ASOF join chỉ tìm mẫu *trước* khung, nên bỏ qua mẫu này dù độ lệch nhỏ hơn rất nhiều so với dung sai 150 ms. Đây là một điểm yếu nhỏ của pipeline: nên dùng phép ghép "mẫu gần nhất ở cả hai phía".
