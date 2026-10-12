@@ -152,11 +152,11 @@ Version của tôi khác của bạn bè dù cùng dữ liệu vì gold sắp tr
 
 ```
 bronze.raw_telemetry_a: 0, bronze.raw_telemetry_b: 0, bronze.trips_raw: 0, bronze.video_files: 1,
-silver.frames: 53, silver.telemetry: 1, silver.frames_flagged: 1, silver.frame_telemetry: 1,
+silver.frames: 25, silver.telemetry: 0, silver.frames_flagged: 0, silver.frame_telemetry: 0,
 input_video_sha256: drive_a = 636ba1a98dfc…e7e9aa, drive_b = bfa62703f645…bee9fdc
 ```
 
-Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 53 vì mỗi trip ghi một partition và tôi đã chạy lại (thí nghiệm idempotent), nhưng nội dung không đổi. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
+Trả lời "dataset này tạo từ dữ liệu nào": từ hai video có sha256 như trên (`drive_a.mp4`, `drive_b.mp4`) và telemetry ở **version 0** của `bronze.raw_telemetry_a/b`. Dữ liệu đi qua silver ở các version ghi trên. `silver.frames` ở version 25 vì mỗi trip ghi một partition, tức 26 commit (version 0 đến 25), khi chạy từ lake trống. Ở lần chạy trước, sau thí nghiệm idempotent, con số này là 53, nhưng `manifest_sha256` vẫn y hệt: version Delta đếm số lần ghi, còn nội dung không đổi. Kết quả là 1019 khung, `manifest_sha256 = b6a92df4…3a002`.
 
 Ba tháng sau, để tái tạo đúng dataset này cần:
 1. sha256 của video đầu vào, để chắc đúng file gốc;
@@ -171,21 +171,64 @@ Chạy lại xong, so `dataset_version` và `manifest_sha256` để xác nhận 
 ### Câu 9
 Mô tả chính xác điều xảy ra khi trip của bạn sập rồi chạy lại: bao nhiêu task chuyển đỏ, bao nhiêu task `upstream_failed`, bạn clear gì, dữ liệu có nhân đôi không, `dataset_version` có đổi không? Bằng chứng (ảnh, số) là gì?
 
-(trả lời ở đây)
+Trip của tôi là `trip-00722`, tính bằng `202602973 % 26 = 1`. MSSV có chữ `A` nên tôi lấy phần số. Tôi đặt `LAB_FAIL_ONCE=trip-00722`, trigger `day09_reset`, rồi trigger `day09_video_pipeline` (run `manual__2026-10-12T10:25:58`).
+
+- **1 task đỏ**: `silver_frames` map_index 1. Log ghi `RuntimeError: simulated crash while extracting trip-00722; run it again` (ảnh `crash_log.png`).
+- **7 task `upstream_failed`**: `dbt_run_silver`, `dbt_test_silver`, `dbt_run_gold`, `dbt_test_gold`, `publish_lake`, `export_dataset`, `publish_warehouse` (ảnh `crash_graph_red.png`).
+- **29 task vẫn xanh**: 3 task bronze, `trip_commands` và 25 task `silver_frames` của các trip khác. Các task này **không chạy lại**.
+- Tôi **chỉ clear task đỏ** (kèm các task phía sau đang `upstream_failed`, tương đương nút "Clear task" với lựa chọn Downstream và Only failed). Tổng cộng 8 task chạy lại, và DAG chuyển **xanh 37/37** (ảnh `crash_rerun_green.png`).
+
+Dữ liệu **không nhân đôi**:
+- `trip-00722` có **60 dòng, 60 `frame_id` riêng biệt** trong `silver.frames`;
+- tổng `silver.frames` vẫn là **1246** dòng.
+
+Lý do là lần chạy lại ghi đè đúng partition `trip_id` (xem câu 4). `verify` vẫn **27/27**, `dataset_version` vẫn là **`8dfe4968256f`**: nội dung giống hệt nên hash giống hệt. Đây chính là lợi ích của việc mỗi trip là một task idempotent: lỗi ở một node chỉ tốn chạy lại 1/26 phần việc trích khung.
 
 ### Câu 10
 Nâng từ 2 drive lên **500 xe mỗi ngày**: ba thành phần nào của pipeline này sẽ vỡ đầu tiên, và bạn thay bằng gì (nối với slide 12, 22, 23)?
 
-(trả lời ở đây)
+Hiện tại 2 drive khoảng 10 phút video cho ra 1246 khung, và cả pipeline mất khoảng 2 phút trên một máy. Với 500 xe/ngày, mỗi xe vài giờ, lượng dữ liệu gấp khoảng 10⁴–10⁵ lần. Ba chỗ vỡ đầu tiên:
+
+1. **Trích khung bằng FFmpeg trong worker Airflow** (`silver_frames`, mỗi trip một task trên cùng container). CPU và đĩa của một máy không kham nổi hàng nghìn giờ video. Airflow cũng không phải nơi chạy compute nặng: hàng chục nghìn mapped task sẽ làm nghẽn scheduler. **Thay bằng**: xử lý video phân tán (Spark/Ray, hoặc job Kubernetes tự co giãn, có GPU decode NVDEC). Airflow chỉ còn vai trò điều phối, mỗi task là một batch hoặc một ngày, không phải một trip (slide 12, 23).
+2. **DuckDB + dbt chạy trong một tiến trình** cho silver/gold. DuckDB là engine một máy, và join telemetry–khung hình theo event time trên hàng tỷ dòng sẽ vượt RAM. **Thay bằng**: engine phân tán (Spark/Trino/Databricks SQL) đọc thẳng các bảng Delta, giữ nguyên dbt làm lớp mô hình và test. Partition theo `date/vehicle_id` và xử lý **incremental**, chỉ partition mới, thay vì rebuild toàn bộ (slide 22).
+3. **Ingest theo lô từ file CSV/mp4 đặt sẵn** cùng warehouse Postgres một node. 500 xe đổ dữ liệu liên tục cần ingest dạng **streaming** (Kafka/Kinesis vào bronze, có schema registry để bắt drift như nguồn B). Postgres một node cũng không chứa nổi `mart_frame_gallery` hàng chục triệu dòng; thay bằng warehouse cột (BigQuery/Snowflake/ClickHouse), hoặc query trực tiếp lakehouse (slide 12, 23).
+
+Thêm vào đó, `dataset_version` hiện băm toàn bộ danh sách khung mỗi lần. Ở quy mô lớn nên version theo snapshot Delta cùng manifest phân mảnh. Object storage MinIO một node cũng phải chuyển sang S3/GCS.
 
 ## Câu hỏi riêng của bạn trên Metabase
 
 Câu SQL bạn thêm vào dashboard và điều nó cho biết:
 
-(trả lời ở đây)
+Tôi thêm vào dashboard câu hỏi **"[MSSV 2A202602973] Tỷ lệ khung bị loại theo trip"** (biểu đồ cột, nằm đầu dashboard):
+
+```sql
+select trip_id, drive_id, split, avg_speed_kmh, frames, frames_kept,
+       round(100.0 * (frames - frames_kept) / frames, 1) as pct_bi_loai
+from marts.mart_trip_summary
+order by pct_bi_loai desc
+```
+
+Kết quả, 4 trip bị loại nhiều nhất:
+
+| trip | drive | split | tốc độ TB (km/h) | khung | giữ lại | % bị loại |
+|---|---|---|---|---|---|---|
+| trip-04622 | A | train | 67.1 | 60 | 26 | 56.7 |
+| trip-03904 | A | val | 46.1 | 22 | 11 | 50.0 |
+| trip-02086 | A | train | 17.6 | 60 | 32 | 46.7 |
+| trip-08888 | A | test | 6.5 | 60 | 36 | 40.0 |
+
+Đọc biểu đồ:
+- Cả 8 trip bị loại nhiều nhất đều thuộc drive A (6 trip) hoặc là trip B chạy nhanh.
+- Truy ngược bằng `silver_frames_flagged`, gần như toàn bộ khung bị loại ở 4 trip trên là **khung trùng** (dHash), không phải đen hay mờ. Ví dụ trip-04622 có 34 khung trùng, trip-02086 có 28, trip-08888 có 24.
+- Với trip chậm (6–18 km/h) thì điều này hợp lý: xe gần như đứng yên.
+- Đáng chú ý, ở split test, trip-08888 (6.5 km/h) mất 40 % khung, nên test set của drive A vừa ít vừa thiên về cảnh chạy chậm.
 
 ## Nhìn lại
 
 Điều bạn thấy bất ngờ nhất, điều gì còn chưa rõ, và một lỗi dữ liệu mà bạn nghĩ pipeline **chưa** bắt được (nếu có). Tối đa 8 dòng.
 
-(trả lời ở đây)
+- **Bất ngờ nhất**: trip-04622 chạy trung bình **67 km/h** mà vẫn mất **34/60** khung vì "trùng". Một phần là đoạn camera đứng hình 6 giây được cấy vào drive A. Phần còn lại cho thấy dHash 64 bit (ảnh thu nhỏ còn 9×8) **không nhạy với chuyển động trên đường cao tốc**, nơi cảnh vật đồng đều (bầu trời, mặt đường). Ngưỡng 2 bit có thể đang loại nhầm khung khác nhau thật.
+- **Chưa rõ**: vì sao mỗi drive đều có đúng 7 khung "mất đồng bộ" (> 150 ms). Tôi đoán đó là các khoảng hở telemetry mà test `max_gap_ms` báo WARN, nhưng chưa kiểm chứng từng khung.
+- **Lỗi pipeline chưa bắt**:
+  - Tốc độ **trong khoảng 0..70 m/s nhưng nhảy phi vật lý** giữa hai mẫu cách nhau 0,1 giây (ví dụ 10 → 60 m/s) vẫn lọt vào silver. Pipeline chưa có kiểm tra gia tốc hay tính liên tục, và cũng không đối chiếu tốc độ với quãng đường GPS.
+  - Khung trùng chỉ so với **khung liền trước**, nên camera đứng hình xen kẽ (khung A, B, A, B) sẽ không bị phát hiện.
